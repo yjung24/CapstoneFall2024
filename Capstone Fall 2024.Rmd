@@ -1,0 +1,221 @@
+---
+title: "Capstone Fall 24'"
+author: "Yoon Ji Jung"
+date: "2024-09-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+---
+Theoretical DAG
+---
+```{r}
+library(dagitty)
+dag_diagram <- dagitty('dag {
+bb="0,0,1,1"
+"CRC (ages <50)" [outcome,pos="0.531,0.513"]
+"Gut Microbiome" [pos="0.406,0.349"]
+BMI [exposure,pos="0.275,0.516"]
+age [pos="0.406,0.227"]
+gender [pos="0.409,0.129"]
+"Gut Microbiome" -> "CRC (ages <50)"
+BMI -> "CRC (ages <50)"
+BMI -> "Gut Microbiome"
+age -> "CRC (ages <50)"
+age -> BMI
+gender -> "CRC (ages <50)"
+gender -> BMI}')
+plot(dag_diagram)
+```
+
+---
+Sourcing data from CuratedMetagenomicData Package and Table 1
+---
+```{r message=FALSE, warning=FALSE}
+library(curatedMetagenomicData)
+library(dplyr)
+library(SummarizedExperiment)
+library(TreeSummarizedExperiment)
+library(tidyr)
+
+eocrc <- sampleMetadata %>%
+  filter(grepl("CRC", sampleMetadata$disease))  %>% 
+  filter(age<50) %>%
+  filter(body_site == "stool") %>%
+  select(where(~!all(is.na(.x)))) 
+
+eocrc_returnsamples <-  eocrc %>% returnSamples(dataType = "relative_abundance", rownames = "short")
+
+eocrc_studies <- eocrc %>% distinct(study_name)
+
+keep_studies <- eocrc_studies$study_name
+
+eocrc_tse <- sampleMetadata %>%
+  filter(study_name %in% keep_studies) %>%
+  filter(study_condition %in% c("CRC", "control")) %>%
+  filter(disease %in% c("CRC", "CRC;T2D", "CRC;T2D;fatty_liver;hypertension", "healthy")) %>%
+  filter(age<50) %>%
+  filter(body_site == "stool") 
+
+eocrc_tse2<- eocrc_tse %>% 
+  mutate(BMI_new = cut(BMI, 
+                breaks = c(0, 24.99, 29.99, Inf),
+                labels=c("Normal weight (<25 kg/m^2)", "Overweight ≥25 and <30 kg/m^2", "Obese ≥30 kg/m^2")))
+
+#Under weight < 18.5, 18 <= healthy weight < 25, 25 <= overweight < 30, 30 <= obese
+```
+
+```{r eval=FALSE, include=FALSE}
+table(eocrc_tse2$BMI, eocrc_tse2$BMI_new)
+```
+
+```{r}
+library(gtsummary)
+eocrc_tse %>% tbl_summary(by = study_condition, statistic = list(all_continuous() ~ "{mean} ({sd})"), include = c(age, gender, BMI, study_name, disease))
+```
+
+---
+Checking distribution of Age and BMI
+---
+```{r}
+library(tidyverse)
+library(ggplot2)
+
+eocrc_tse %>% filter(study_condition == "CRC") %>%
+ggplot(aes(x = age)) + geom_histogram(binwidth = 1) + labs(title = "Age Distribution of EOCRC")
+
+eocrc_tse %>% filter(study_condition == "control") %>%
+ggplot(aes(x = age)) + geom_histogram(binwidth = 1) + labs(title = "Age Distribution of Healthy Controls")
+
+eocrc_tse %>% filter(study_condition == "CRC") %>%
+ggplot(aes(x = BMI)) + geom_histogram(binwidth = 1) + labs(title = "BMI Distribution of EOCRC", x = "BMI kg/m2")
+
+eocrc_tse %>% filter(study_condition == "control") %>%
+ggplot(aes(x = BMI)) + geom_histogram(binwidth = 1) + labs(title = "BMI Distribution of Healthy Controls", x = "BMI kg/m2")
+
+eocrc_tse %>% ggplot(aes(x = BMI)) + geom_histogram(binwidth = 1) + labs(title = "BMI Distribution Overall", x = "BMI kg/m2")
+
+```
+
+---
+Table 1
+---
+```{undefined message=FALSE, warning=FALSE}
+library(table1)
+label(eocrc_tse2$study_condition) <- 'Study Condition'
+label(eocrc_tse2$age) <- 'Age'
+label(eocrc_tse2$gender) <- 'Sex'
+label(eocrc_tse2$study_name) <- 'Study Name'
+eocrc_tse3 <- eocrc_tse2 %>% drop_na(BMI_new)
+
+#table 1a stratified on BMI levels (Normal Weight, Overweight, Obese)
+table1(~ study_condition + age + gender + BMI + study_name| BMI_new, data = eocrc_tse3, overall=c("Total"), caption = "Table 1. Descriptive Statistics of Early Onset Colorectal Cancer Patients and Healthy Controls from CuratedMetagenomicData Stratified on BMI Category", footnote = "This table describes the age, sex, and BMI of 82 patients diagnosed with Early Onset Colorectal Cancer and for 122 healthy controls from 10 different studies whose stool samples were sequenced with metagenomic data made publicly available in the CuratedMetagonimicData package in R stratified by BMI category")
+
+#table 1b stratified on disease condition (CRC, Healthy)
+table1(~ age + gender + BMI + study_name | study_condition, data = eocrc_tse3, overall=c("Total"), caption = "Table 1. Descriptive Statistics of Early Onset Colorectal Cancer Patients and Healthy Controls from CuratedMetagenomicData R Package", footnote = "This table describes the age, sex, and BMI of 82 patients diagnosed with Early Onset Colorectal Cancer and for 122 healthy controls from 10 different studies whose stool samples were sequenced with metagenomic data made publicly available in the CuratedMetagonimicData package in R")
+
+library(stats)
+
+#table 1a chisq tests
+chisq.test(eocrc_tse3$study_condition, eocrc_tse3$BMI_new) 
+chisq.test(eocrc_tse3$gender, eocrc_tse3$BMI_new) 
+
+#table 1b t.tests and chisq.test
+t.test(BMI ~ study_condition, data = eocrc_tse3, var.equal=TRUE)
+t.test(age ~ study_condition, data = eocrc_tse3, var.equal=TRUE)
+chisq.test(eocrc_tse3$gender, eocrc_tse3$study_condition)
+
+```
+
+---
+Running Alpha Diversity and LefSe for CRC vs. Healthy
+---
+```{r message=FALSE, warning=FALSE}
+library(lefser)
+
+eocrc_tse4 <- eocrc_tse2 %>% returnSamples(dataType = "relative_abundance", rownames = "short") 
+
+rel_abundance <- relativeAb(eocrc_tse4)
+
+res_group <- lefser(rel_abundance, kruskal.threshold=0.05, wilcox.threshold=0.05, lda.threshold=0.05, groupCol="study_condition", blockCol=NULL, assay=1L, trim.names=FALSE, checkAbundances=TRUE)
+
+lefserPlot(res_group)
+
+library(mia)
+library(scater)
+
+shannon <- estimateDiversity(eocrc_tse4, assay.type = "relative_abundance", index = "shannon")
+
+alphaplot <- eocrc_tse4 %>% estimateDiversity(assay.type = "relative_abundance", index = "shannon") %>% 
+  plotColData(x = "study_condition", y = "shannon", colour_by = "study_condition", shape_by = "study_condition") + 
+  labs(x = "Healthy Controls vs. Early Onset CRC Cases", y = "Alpha Diversity") 
+
+alphaplot
+
+wilcox.test(shannon ~ study_condition, data = colData(shannon))
+```
+
+---
+Deriving Shannon Diversity DF and Merging it with Clinical Metadata DF
+---
+```{r message=FALSE, warning=FALSE}
+library(vegan)
+otu_abundance <- assay(eocrc_tse4)
+otu_abundance <- t(otu_abundance)
+shannon_diversity <- diversity(otu_abundance, index = "shannon")
+shannon_diversity_df <- data.frame(SampleID = rownames(otu_abundance), Shannon = shannon_diversity)
+
+#transforming coldata = clinical data from treesummarizedexperiment type into df
+metadata <- colData(eocrc_tse4)
+metadata_df <- as.data.frame(metadata)
+metadata_df$SampleID <- rownames(metadata_df)
+
+#merging clinical data and shannon diversity df by sampleID
+merge_df <- merge(metadata_df, shannon_diversity_df, by = "SampleID")
+
+#log-transformations for shannon diversity and bmi
+merge_df$log_Shannon <- log10(max(merge_df$Shannon+1) - merge_df$Shannon)
+
+#checking for skewness of shannon diversity
+ggplot(merge_df, aes(Shannon)) + geom_histogram()
+ggplot(merge_df, aes(log_Shannon)) + geom_histogram()
+```
+
+---
+Linear Regression Model 1) shannon diversity ~ BMI + age + gender
+---
+```{r}
+#running linear regression model with BMI as exposure and Shannon diversity as the outcome variable
+
+model_crude1 <- lm(log_Shannon ~ BMI, data = merge_df)
+summary(model_crude1)
+
+model_crude2 <- lm(log_Shannon ~ BMI_new, data = merge_df)
+summary(model_crude2)
+
+model_adj1 <- lm(log_Shannon ~ BMI + age + gender + study_name, data = merge_df)
+summary(model_adj1)
+
+model_adj2 <- lm(log_Shannon ~ BMI_new + age + gender + study_name, data = merge_df)
+summary(model_adj2)
+```
+
+---
+Logistic Regression Model 2) study_condition ~ Shannon diversity + age + gender
+---
+
+```{r}
+merge_df$study_condition <- as.factor(merge_df$study_condition)
+
+model_crude3 <- glm(study_condition ~ log_Shannon, data = merge_df, family = binomial(link = "logit"))
+summary(model_crude3)
+
+model_adj3 <- glm(study_condition ~ log_Shannon + age + gender, data = merge_df, family = binomial(link = "logit"))
+summary(model_adj3)
+```
+
+---
+Currently cannot proceed with mediation analysis due to lack of significant association between BMI and microbiome - shannon diversity
+---
